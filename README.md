@@ -1,30 +1,5 @@
-# CS3210 Lab assignments
+# Raspberry Pi OS in Rust 
 
-This repository contains lab assignments for Georgia Tech CS3210 "Design of Operating Systems".
-The latest course material is available [here](https://tc.gts3.org/cs3210/2020/spring/index.html).
+Working through the [labs](https://tc.gts3.org/cs3210/2020/spring/lab.html) for the Spring 2020 version of Georgia Tech's CS 3210 (Design of Operating Systems), which were originally based on [CS 140e](https://cs140e.sergio.bz/) at Stanford.
 
-## Who should take CS3210?
-
-- Anyone wants to work on challenges in operating systems
-- Anyone cares about what's going on under the hood
-- Anyone has to build high-performance systems (e.g., Cloud, Trading)
-- Anyone wants to build embedded/IoT firmware (e.g., Robot)
-- Anyone needs to diagnose bugs or security problems
-
-## Why Rust?
-
-Historically, C has been mainly used for OS development because of its portability,
-minimal runtime, direct hardware/memory access, and (decent) usability.
-Rust provides all of these features with addition of memory safety guarantee,
-strong type system, and modern language abstractions
-which help programmers to make less mistakes when writing code.
-
-## Acknowledgement
-
-We built our labs based on the materials originally developed for
-[CS140e: An Experimental Course on Operating Systems](https://cs140e.sergio.bz/)
-by [Sergio Benitez](https://sergio.bz/).
-We have ported it to use newer toolchains such as Rust 2018 edition,
-`cargo-xbuild` (instead of `xargo`), and `no_std` Rust with a minimal shim library
-(instead of custom built std).
-We’ve also developed it further to include topics such as virtual memory management, multicore scheduling, mutex designing, and implementing a networking stack.
+I am completing this as an additional project while taking CS 3210 in Spring 2025, which focuses on adding additional features to the Xv6 operating system in C (and to learn Rust). 
