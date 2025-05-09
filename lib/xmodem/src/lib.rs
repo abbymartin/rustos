@@ -19,6 +19,8 @@ const ACK: u8 = 0x06;
 const NAK: u8 = 0x15;
 const CAN: u8 = 0x18;
 
+const PACKET_SZ: usize = 128;
+
 /// Implementation of the XMODEM protocol.
 pub struct Xmodem<R> {
     packet: u8,
@@ -52,7 +54,7 @@ impl Xmodem<()> {
         where W: io::Read + io::Write, R: io::Read
     {
         let mut transmitter = Xmodem::new_with_progress(to, f);
-        let mut packet = [0u8; 128];
+        let mut packet = [0u8; PACKET_SZ];
         let mut written = 0;
         'next_packet: loop {
             let n = data.read_max(&mut packet)?;
@@ -96,7 +98,7 @@ impl Xmodem<()> {
        where R: io::Read + io::Write, W: io::Write
     {
         let mut receiver = Xmodem::new_with_progress(from, f);
-        let mut packet = [0u8; 128];
+        let mut packet = [0u8; PACKET_SZ];
         let mut received = 0;
         'next_packet: loop {
             for _ in 0..10 {
@@ -182,7 +184,22 @@ impl<T: io::Read + io::Write> Xmodem<T> {
     /// byte was not `byte`, if the read byte was `CAN` and `byte` is not `CAN`,
     /// or if writing the `CAN` byte failed on byte mismatch.
     fn expect_byte_or_cancel(&mut self, byte: u8, expected: &'static str) -> io::Result<u8> {
-        unimplemented!()
+        let read: u8 = self.read_byte(false)?; 
+        //println!("read byte: {}", read);
+
+        if read == byte {
+            Ok(read)
+        } else {
+            let e: io::Result<u8>;
+            if read == CAN {
+                e = ioerr!(ConnectionAborted, "received CAN");
+            } else {
+                e = ioerr!(InvalidData, expected);
+            }
+            //println!("sending CAN");
+            self.write_byte(CAN)?;
+            e
+        }
     }
 
     /// Reads a single byte from the inner I/O stream and compares it to `byte`.
@@ -197,7 +214,16 @@ impl<T: io::Read + io::Write> Xmodem<T> {
     /// of `ConnectionAborted` is returned. Otherwise, the error kind is
     /// `InvalidData`.
     fn expect_byte(&mut self, byte: u8, expected: &'static str) -> io::Result<u8> {
-        unimplemented!()
+        let read: u8 = self.read_byte(false)?; 
+
+        //could prob refactor as a match statement
+        if read == byte {
+            Ok(read)
+        } else if read == CAN {
+            ioerr!(ConnectionAborted, "received CAN")
+        } else {
+            ioerr!(InvalidData, expected)
+        }
     }
 
     /// Reads (downloads) a single packet from the inner stream using the XMODEM
@@ -224,7 +250,55 @@ impl<T: io::Read + io::Write> Xmodem<T> {
     ///
     /// An error of kind `UnexpectedEof` is returned if `buf.len() < 128`.
     pub fn read_packet(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        unimplemented!()
+        if buf.len() < PACKET_SZ {
+            return ioerr!(UnexpectedEof, "Buffer too small");
+        }
+
+        if !self.started {
+            self.write_byte(NAK)?;
+            self.started = true;
+            (self.progress)(Progress::Started);
+        }
+
+        // Waits for an SOH or EOT byte from the sender.
+        let mut byte: u8 = self.read_byte(true)?;
+
+        match byte {
+            SOH => {
+                //compare to packet number (should be immediate next packet)
+                self.expect_byte_or_cancel(self.packet, "Invalid packet number")?;    
+                //check 1's complement of packet number
+                self.expect_byte_or_cancel(255 - self.packet, "Invalid 1's complement of packet number")?;
+
+                // Reads a packet (128 bytes) from the sender
+                for i in 0..PACKET_SZ {
+                    buf[i] = self.read_byte(false)?;
+                }
+
+                let checksum: u8 = get_checksum(buf);
+                byte = self.read_byte(false)?;
+
+                if byte == checksum { // If the checksum is the same, sends an ACK byte and receives the next packet.
+                    self.write_byte(ACK)?;
+                    (self.progress)(Progress::Packet(self.packet));
+                    self.packet += 1;
+                    Ok(PACKET_SZ)
+                } else { // If the checksum differs, sends a NAK byte and retries reception for the same packet.
+                    self.write_byte(NAK)?;
+                    ioerr!(Interrupted, "Checksum failed")
+                }
+            },
+            EOT => {
+                println!("received EOT!");
+                self.write_byte(NAK)?;
+                self.expect_byte_or_cancel(EOT, "EOT not received")?;
+                self.write_byte(ACK)?;
+                self.started = false;
+                Ok(0)
+            },
+            _ => return ioerr!(InvalidData, "Received non EOT or SOH byte at packet start")
+        }
+
     }
 
     /// Sends (uploads) a single packet to the inner stream using the XMODEM
@@ -258,7 +332,47 @@ impl<T: io::Read + io::Write> Xmodem<T> {
     ///
     /// An error of kind `Interrupted` is returned if a packet checksum fails.
     pub fn write_packet(&mut self, buf: &[u8]) -> io::Result<usize> {
-        unimplemented!()
+        if buf.len() < PACKET_SZ && buf.len() != 0 {
+            return ioerr!(UnexpectedEof, "Buffer size");
+        }
+
+        (self.progress)(Progress::Waiting);
+
+        //check for initial NAK
+        if !self.started {
+            self.expect_byte(NAK, "First byte not NAK")?;
+            self.started = true;
+            (self.progress)(Progress::Started);
+        }
+
+        if buf.len() == 0 { //Signal end of Transmission (EOT ->, <- NAK, EOT ->, <- ACK)
+            self.write_byte(EOT)?;
+            self.expect_byte_or_cancel(NAK, "NAK not received")?;
+            self.write_byte(EOT)?;
+            self.expect_byte(ACK, "ACK not received")?;
+            self.started = false;
+            return Ok(0);
+        }
+
+        self.write_byte(SOH)?; //starts transmission
+        self.write_byte(self.packet)?; //sends packet num
+        self.write_byte(255 - self.packet)?; //sends
+        for i in 0..PACKET_SZ {
+            self.write_byte(buf[i])?;
+        }
+        self.write_byte(get_checksum(buf))?;
+
+        let byte: u8 = self.read_byte(true)?;
+
+        // If the byte is NAK, transmission for the same packet is retried up to 10 times.
+        match byte {
+            ACK => {
+                (self.progress)(Progress::Packet(self.packet));
+                self.packet += 1;
+                Ok(PACKET_SZ)
+            }, 
+            _ => ioerr!(Interrupted, "NAK, retry transmission")
+        }
     }
 
     /// Flush this output stream, ensuring that all intermediately buffered
