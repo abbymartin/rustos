@@ -46,12 +46,41 @@ struct Opt {
     raw: bool,
 }
 
+fn progress_fn(progress: xmodem::Progress) {
+    println!("Progress: {:?}", progress);
+}
+
 fn main() {
     use std::fs::File;
-    use std::io::{self, BufReader};
+    use std::io::{self, Read};
 
     let opt = Opt::from_args();
     let mut port = serial::open(&opt.tty_path).expect("path points to invalid TTY");
 
-    // FIXME: Implement the `ttywrite` utility.
+    port.set_timeout(Duration::from_secs(opt.timeout)).expect("Failed to set port timeout");
+
+    //set settings based on args
+    let mut settings = port.read_settings().unwrap();
+    settings.set_baud_rate(opt.baud_rate).expect("Failed to set baudrate");
+    settings.set_char_size(opt.char_width);
+    settings.set_flow_control(opt.flow_control);
+    settings.set_stop_bits(opt.stop_bits);
+
+    port.write_settings(&settings).expect("failed to write port settings");
+
+    //get data input source 
+    let mut input: Box <dyn io::Read>;
+    if let Some(f) = opt.input { //read from file
+        input = Box::new(File::open(f).expect("Open file"));
+    } else { //read from stdin
+        input = Box::new(io::stdin());
+    }
+
+    //send data
+    if opt.raw { //send data as is
+        let size = io::copy(&mut input, &mut port).expect("Failed to copy raw data");
+        println!("Wrote {} bytes to input", size);
+    } else { //send with xmodem
+        Xmodem::transmit_with_progress(input, port, progress_fn).expect("Failed to send data using Xmodem");
+    }
 }
